@@ -27,6 +27,18 @@ services:
       timeout: 5s
       retries: 10
 
+  migrate:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URI: postgres://chat:chat@db:5432/chat
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["procrastinate", "--app=src.tasks.queue.app", "schema", "--apply"]
+    restart: "no"
+
   app:
     build: .
     ports:
@@ -42,6 +54,25 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URI: postgres://chat:chat@db:5432/chat
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["procrastinate", "--app=src.tasks.queue.app", "worker"]
 
 volumes:
   postgres_data:

@@ -50,14 +50,16 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
 ### How streaming works
 
-**Two stores, two jobs:**
-- **Redis Stream** — a per-generation token buffer (15-min TTL, see `STREAM_TTL_SECONDS`). Each call to `/v1/chat/message` mints a fresh `stream_id`; tokens are appended with `XADD`. Because it's a log, not a queue, any number of SSE readers can tail it on their own cursor — or zero can be connected; the writer doesn't care.
-- **Postgres (LangGraph checkpointer)** — durable conversation history. Only written when a graph node completes, so an in-flight reply is **not** there yet.
+**Three processes, three stores:**
+- **API** (FastAPI) — accepts requests, enqueues jobs, relays SSE.
+- **Worker** (procrastinate) — consumes jobs from Postgres, runs LangGraph, writes tokens to Redis.
+- **Redis Stream** — per-generation token buffer (15-min TTL, see `STREAM_TTL_SECONDS`). Each call to `/v1/chat/message` mints a fresh `stream_id`; tokens are appended with `XADD`. A log, not a queue — any number of SSE readers can tail it on their own cursor.
+- **Postgres** — holds both the procrastinate job table and the LangGraph checkpointer. The conversation history is only written when a graph node completes, so an in-flight reply is **not** checkpointed yet.
 
 **Request flow:**
-1. `POST /v1/chat/message` mints `stream_id`, stores `thread_id → stream_id` in Redis, schedules `generate_response` as a FastAPI `BackgroundTasks`, and returns 200 immediately.
-2. The background task runs `graph.astream(...)` and `XADD`s each token to the Redis stream. It's decoupled from the HTTP request — closing the tab does not stop generation.
-3. `GET /v1/chat/stream?thread_id=...` looks up `stream_id`, opens an `XREAD` loop, and relays tokens to the client as SSE events.
+1. `POST /v1/chat/message` mints `stream_id`, stores `thread_id → stream_id` in Redis, `defer_async`s a `generate_response` procrastinate job, and returns 200 immediately.
+2. The worker picks up the job, runs `graph.astream(...)`, and `XADD`s each token to the Redis stream. It's decoupled from the HTTP request — closing the tab does not stop generation.
+3. `GET /v1/chat/stream?thread_id=...` looks up `stream_id`, opens an `XREAD` loop, and relays tokens to the client as SSE events (via `sse-starlette`).
 
 **Reconnecting (close tab, reopen):**
 On load the frontend calls `GET /v1/threads` → picks the most recent → loads history from Postgres via `GET /v1/thread` → opens SSE. The SSE endpoint `XREAD`s from the start of the active stream (or from the last `message_ended` marker, if one exists). The client sees two phases back-to-back:
@@ -66,9 +68,9 @@ On load the frontend calls `GET /v1/threads` → picks the most recent → loads
 
 Both phases go through the same code path; the transition is seamless. Multiple tabs on the same thread work for free — each `XREAD` holds its own cursor.
 
-**Limits:**
+**Limits / notes:**
 - Redis keys (stream, status, mapping) expire after `STREAM_TTL_SECONDS` (default 900s). Reconnect later than that and you see only what reached Postgres.
-- `BackgroundTasks` runs in-process. If the worker crashes mid-generation, the task dies with it — Redis keeps whatever was written before the crash, but nothing re-drives the LLM call. A durable queue (Postgres-backed, or Redis Streams consumer groups with `XAUTOCLAIM`) would close that gap.
+- The procrastinate job is durable in Postgres, but the task currently has retries disabled: a worker crash mid-generation leaves the job in a "doing" state; the client sees whatever tokens made it to Redis before the crash but no retry drives generation forward. Enabling retries (`@app.task(retry=...)`) would require making the token stream idempotent (e.g., clear the stream before re-running) to avoid duplicated output on the resumable SSE channel.
 
 ### API
 - `POST /v1/chat/message`

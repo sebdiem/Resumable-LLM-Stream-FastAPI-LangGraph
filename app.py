@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -10,14 +11,23 @@ from fastapi.responses import FileResponse
 load_dotenv()
 
 from src.api.v1.api import api_router  # noqa: E402
+from src.tasks.queue import app as procrastinate_app  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    async with procrastinate_app.open_async():
+        yield
+
 
 app = FastAPI(
     title="Chat API",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
