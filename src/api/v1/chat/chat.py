@@ -1,16 +1,14 @@
 import os
 import logging
-from time import monotonic
 from datetime import datetime
 from functools import partial
-from typing import AsyncGenerator
 from uuid import uuid4, UUID
 from fastapi import APIRouter, Depends, status, Response
-from fastapi.responses import StreamingResponse
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from sse_starlette.sse import EventSourceResponse
 from src.ai.config import get_llm
 
 from src.ai.agent import GraphBuilder
@@ -23,23 +21,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 STREAM_TTL_SECONDS = int(os.getenv("STREAM_TTL_SECONDS", "900"))  # 15 minutes by default
-
-
-def _format_sse_event(message_id: str, data: str, event: str = None) -> str:
-    """Build a well-formed SSE event string.
-
-    - Splits payload into lines and prefixes each with "data: ".
-    - Adds optional event name.
-    - Appends a blank line terminator as required by the SSE spec.
-    """
-    lines = data.split("\n")
-    parts: list[str] = []
-    parts.append(f"event: {event}")
-    parts.append(f"id: {message_id}")
-    for line in lines:
-        parts.append(f"data: {line}")
-    parts.append("")  # terminator
-    return "\n".join(parts) + "\n"
 
 
 async def generate_response(
@@ -141,40 +122,23 @@ async def stream_tokens(thread_id: UUID):
 
     message_ended_id = await r.get(f"{STREAM_ID}:message_ended")
 
-    async def get_chunks(last_id: str) -> AsyncGenerator[str, None]:
-        last_ping_time = monotonic()
+    async def event_generator():
+        last_id = message_ended_id or "0"
         while True:
-            # Heartbeat ping to keep SSE connection alive
-            current_time = monotonic()
-            if current_time - last_ping_time >= 20:
-                yield ": keepalive\n\n"
-                last_ping_time = current_time
-
             messages = await r.xread(streams={STREAM_ID: last_id}, block=3000)
-
             if not messages:
                 continue
 
             for _, msgs in messages:
                 for msg_id, data in msgs:
-                    yield _format_sse_event(
-                        message_id=msg_id,
-                        data=data["data"],
-                        event=data["event"],
-                    )
-
+                    yield {
+                        "id": msg_id,
+                        "event": data["event"],
+                        "data": data["data"],
+                    }
                     last_id = msg_id
 
                     if data["event"] == "system" and data["data"] == "end":
                         return
 
-    return StreamingResponse(
-        get_chunks(last_id=message_ended_id or "0"),
-        media_type="text/event-stream",
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return EventSourceResponse(event_generator())
