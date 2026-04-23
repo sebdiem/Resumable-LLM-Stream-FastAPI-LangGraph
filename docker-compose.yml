@@ -36,7 +36,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: ["procrastinate", "--app=src.tasks.queue.app", "schema", "--apply"]
+    command: ["python", "-m", "src.tasks.migrate"]
     restart: "no"
 
   app:
