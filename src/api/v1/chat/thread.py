@@ -1,20 +1,17 @@
-import os
 from functools import partial
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query, Request, Response
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-from src.ai.config import get_llm
-from src.database.session import get_session
-from src.database.checkpointer import Checkpoint
-from src.ai.agent import GraphBuilder
-from src.schema.chat import ThreadMessagesItemSchema
+from pydantic import BaseModel
 from sqlalchemy import select
-from fastapi import Response
+
+from src.ai.agent import GraphBuilder
+from src.ai.config import get_llm
+from src.database.checkpointer import Checkpoint
+from src.database.session import get_session
+from src.schema.chat import ThreadMessagesItemSchema
 
 router = APIRouter()
 
@@ -29,51 +26,48 @@ class UpdateThreadNameRequest(BaseModel):
     response_model=list[ThreadMessagesItemSchema],
 )
 async def get_thread(
+    request: Request,
     thread_id: UUID = Query(..., description="The thread ID to retrieve"),
     llm: BaseChatModel = Depends(partial(get_llm, "chat")),
 ):
     config = {"configurable": {"thread_id": str(thread_id)}}
-    async with AsyncPostgresSaver.from_conn_string(
-        conn_string=os.getenv("DATABASE_URI", ""),
-    ) as checkpointer:
-        graph = GraphBuilder(
-            llm=llm,
-            checkpointer=checkpointer,
-            store=None,
-        ).get_graph()
+    checkpointer = request.app.state.checkpointer
+    graph = GraphBuilder(
+        llm=llm,
+        checkpointer=checkpointer,
+        store=None,
+    ).get_graph()
 
-        state = await graph.aget_state(config, subgraphs=False)
-        if not state or "messages" not in state.values:
-            return []
+    state = await graph.aget_state(config, subgraphs=False)
+    if not state or "messages" not in state.values:
+        return []
 
-        messages = []
-        for message in state.values["messages"]:
-            if isinstance(message, (HumanMessage, AIMessage)) and message.content:
-                if isinstance(message.content, str):
-                    messages.append(
-                        ThreadMessagesItemSchema(
-                            type=message.type, content=message.content
-                        )
+    messages = []
+    for message in state.values["messages"]:
+        if isinstance(message, (HumanMessage, AIMessage)) and message.content:
+            if isinstance(message.content, str):
+                messages.append(
+                    ThreadMessagesItemSchema(
+                        type=message.type, content=message.content
                     )
-                elif isinstance(message.content, list):
-                    messages.append(
-                        ThreadMessagesItemSchema(
-                            type=message.type,
-                            content=message.content[0].get("text", ""),
-                        )
+                )
+            elif isinstance(message.content, list):
+                messages.append(
+                    ThreadMessagesItemSchema(
+                        type=message.type,
+                        content=message.content[0].get("text", ""),
                     )
+                )
 
-        return messages
+    return messages
 
 
 @router.delete("", description="Delete a current thread.")
 async def delete_thread(
+    request: Request,
     thread_id: UUID = Query(..., description="The thread ID to delete"),
 ):
-    async with AsyncPostgresSaver.from_conn_string(
-        conn_string=os.getenv("DATABASE_URI", ""),
-    ) as checkpointer:
-        await checkpointer.adelete_thread(thread_id)
+    await request.app.state.checkpointer.adelete_thread(thread_id)
     return []
 
 

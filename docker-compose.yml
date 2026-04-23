@@ -72,7 +72,7 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    command: ["procrastinate", "--app=src.tasks.queue.app", "worker"]
+    command: ["python", "-m", "src.tasks.worker"]
 
 volumes:
   postgres_data:

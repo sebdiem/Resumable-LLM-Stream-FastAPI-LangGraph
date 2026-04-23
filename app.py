@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 load_dotenv()
 
 from src.api.v1.api import api_router  # noqa: E402
+from src.database.checkpoint_pool import open_checkpointer  # noqa: E402
 from src.tasks.queue import app as procrastinate_app  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    async with procrastinate_app.open_async():
+    async with procrastinate_app.open_async(), open_checkpointer() as checkpointer:
+        _app.state.checkpointer = checkpointer
         yield
 
 
