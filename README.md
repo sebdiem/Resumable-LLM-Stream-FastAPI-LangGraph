@@ -2,6 +2,12 @@
 
 High-level template for resumable LLM token streaming using FastAPI, Redis Streams, and LangGraph with a Postgres checkpointer. Includes a minimal frontend and clean SSE streaming endpoints.
 
+### Architecture
+
+<img width="1512" height="1040" alt="Architecture diagram" src="architecture.excalidraw.svg" />
+
+### UI Preview
+
 <img width="1512" height="838" alt="image" src="https://github.com/user-attachments/assets/fd259a7c-ce9e-4082-a20d-2b13b77dc903" />
 
 ### Features
