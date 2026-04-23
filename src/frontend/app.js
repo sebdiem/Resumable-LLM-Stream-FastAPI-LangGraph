@@ -393,6 +393,12 @@ els.composer.addEventListener("submit", async (e) => {
 });
 
 els.input.addEventListener("input", autoGrowTextarea);
+els.input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.shiftKey) {
+    e.preventDefault();
+    els.composer.requestSubmit();
+  }
+});
 
 els.newChat.addEventListener("click", () => {
   // Do not create sidebar item yet; show an empty draft chat
