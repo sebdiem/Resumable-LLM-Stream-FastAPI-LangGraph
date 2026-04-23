@@ -48,9 +48,27 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
 - Open docs at `http://localhost:8000/docs`.
 - UI is served at `http://localhost:8000`.
 
-### How streaming works (at a glance)
-- `POST /v1/chat/message` accepts a user message and starts background generation that streams tokens to a Redis Stream.
-- `GET /v1/chat/stream?thread_id=...` reads from Redis and relays tokens to the client via Server‑Sent Events (SSE). If the connection drops, the client can resume.
+### How streaming works
+
+**Two stores, two jobs:**
+- **Redis Stream** — a per-generation token buffer (15-min TTL, see `STREAM_TTL_SECONDS`). Each call to `/v1/chat/message` mints a fresh `stream_id`; tokens are appended with `XADD`. Because it's a log, not a queue, any number of SSE readers can tail it on their own cursor — or zero can be connected; the writer doesn't care.
+- **Postgres (LangGraph checkpointer)** — durable conversation history. Only written when a graph node completes, so an in-flight reply is **not** there yet.
+
+**Request flow:**
+1. `POST /v1/chat/message` mints `stream_id`, stores `thread_id → stream_id` in Redis, schedules `generate_response` as a FastAPI `BackgroundTasks`, and returns 200 immediately.
+2. The background task runs `graph.astream(...)` and `XADD`s each token to the Redis stream. It's decoupled from the HTTP request — closing the tab does not stop generation.
+3. `GET /v1/chat/stream?thread_id=...` looks up `stream_id`, opens an `XREAD` loop, and relays tokens to the client as SSE events.
+
+**Reconnecting (close tab, reopen):**
+On load the frontend calls `GET /v1/threads` → picks the most recent → loads history from Postgres via `GET /v1/thread` → opens SSE. The SSE endpoint `XREAD`s from the start of the active stream (or from the last `message_ended` marker, if one exists). The client sees two phases back-to-back:
+- **Catch-up** — all backlogged tokens arrive in a burst and paint near-instantly.
+- **Live** — new tokens stream one-by-one as the LLM continues.
+
+Both phases go through the same code path; the transition is seamless. Multiple tabs on the same thread work for free — each `XREAD` holds its own cursor.
+
+**Limits:**
+- Redis keys (stream, status, mapping) expire after `STREAM_TTL_SECONDS` (default 900s). Reconnect later than that and you see only what reached Postgres.
+- `BackgroundTasks` runs in-process. If the worker crashes mid-generation, the task dies with it — Redis keeps whatever was written before the crash, but nothing re-drives the LLM call. A durable queue (Postgres-backed, or Redis Streams consumer groups with `XAUTOCLAIM`) would close that gap.
 
 ### API
 - `POST /v1/chat/message`
