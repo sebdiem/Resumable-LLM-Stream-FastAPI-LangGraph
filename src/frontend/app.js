@@ -83,6 +83,15 @@ function createThreadElement(thread) {
   return node;
 }
 
+function upsertThreadInSidebar(thread) {
+  const existing = els.threads.querySelector(`.thread[data-id="${thread.id}"]`);
+  if (existing) {
+    existing.remove();
+  }
+  els.threads.prepend(createThreadElement(thread));
+  setActiveThreadInSidebar();
+}
+
 function setActiveThreadInSidebar() {
   for (const btn of els.threads.querySelectorAll(".thread")) {
     btn.classList.toggle("active", btn.dataset.id === currentThreadId);
@@ -296,6 +305,10 @@ function getActiveThreadFromSidebar() {
   return active?.dataset.id || null;
 }
 
+function refreshThreadsInBackground() {
+  fetchThreads().catch(() => {});
+}
+
 
 // Event handlers
 els.composer.addEventListener("submit", async (e) => {
@@ -304,12 +317,18 @@ els.composer.addEventListener("submit", async (e) => {
   if (!value) return;
 
   // If we are in draft new chat mode (no currentThreadId), create an id now on first send
+  const isDraftThread = !currentThreadId;
   if (!currentThreadId) {
     const newId = (typeof crypto !== "undefined" && crypto.randomUUID)
       ? crypto.randomUUID()
       : ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
     currentThreadId = newId;
     els.chatTitle.textContent = "New Chat";
+    upsertThreadInSidebar({
+      id: newId,
+      chat_name: "New Chat",
+      last_activity_time: new Date().toISOString(),
+    });
   }
 
   // Show user's message immediately
@@ -319,6 +338,9 @@ els.composer.addEventListener("submit", async (e) => {
 
   // Send message and open stream
   await sendMessage(currentThreadId, value);
+  if (isDraftThread) {
+    refreshThreadsInBackground();
+  }
 
   let aiBubble = null;
   let toolLoader = null;
@@ -391,3 +413,23 @@ els.newChat.addEventListener("click", () => {
     console.error(e);
   }
 })();
+
+// When the tab is restored from the browser's back/forward cache (e.g.
+// Cmd+Shift+T), init() does NOT re-run — the page resumes with whatever
+// sidebar state it had at close time. Refresh the thread list so any
+// thread created just before closing is visible.
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {
+    refreshThreadsInBackground();
+  }
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refreshThreadsInBackground();
+  }
+});
+
+window.addEventListener("focus", () => {
+  refreshThreadsInBackground();
+});
