@@ -2,7 +2,7 @@ import os
 import logging
 from datetime import datetime
 
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessageChunk
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from procrastinate import App, PsycopgConnector
 
@@ -26,7 +26,7 @@ checkpointer: AsyncPostgresSaver | None = None
 
 
 @app.task(queue="chat", name="generate_response")
-async def generate_response(thread_id: str, stream_id: str, message: str) -> None:
+async def generate_response(thread_id: str, stream_id: str) -> None:
     if checkpointer is None:
         raise RuntimeError(
             "Checkpointer not initialized; run the worker via src.tasks.worker"
@@ -45,8 +45,11 @@ async def generate_response(thread_id: str, stream_id: str, message: str) -> Non
             llm=llm, checkpointer=checkpointer, store=None
         ).get_graph()
 
+        # The user turn (message, and later attachments/file refs) is already
+        # in LangGraph state — the POST handler wrote it via aupdate_state.
+        # Pass None to resume from that checkpoint instead of re-injecting.
         events = graph.astream(
-            {"messages": HumanMessage(content=message)},
+            None,
             config,
             stream_mode="messages",
         )

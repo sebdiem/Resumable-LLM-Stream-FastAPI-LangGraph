@@ -1,8 +1,13 @@
+from datetime import datetime
 from uuid import uuid4, UUID
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
+from langchain_core.messages import HumanMessage
+from langgraph.graph import START
 from sse_starlette.sse import EventSourceResponse
 
+from src.ai.agent import GraphBuilder
+from src.ai.config import get_llm
 from src.cache.redis import get_redis
 from src.schema.chat import ChatRequest
 from src.tasks.queue import STREAM_TTL_SECONDS, generate_response
@@ -11,18 +16,38 @@ router = APIRouter()
 
 
 @router.post("/message", status_code=status.HTTP_200_OK)
-async def chat_message(request: ChatRequest) -> None:
+async def chat_message(request: ChatRequest, http_request: Request) -> None:
+    # The LangGraph state write and the procrastinate enqueue run in
+    # separate Postgres transactions. If the process crashes between them,
+    # the user message lands in state but no job runs — the client never
+    # gets a reply for that turn. Acceptable for now; a client-side retry
+    # or a reaper that re-enqueues orphaned state updates would close it.
     r = get_redis()
-
     stream_id = str(uuid4())
     thread_id = str(request.thread_id)
+
+    checkpointer = http_request.app.state.checkpointer
+    graph = GraphBuilder(
+        llm=get_llm("chat"), checkpointer=checkpointer, store=None
+    ).get_graph()
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "last_activity_time": datetime.now().isoformat(),
+        }
+    }
+    await graph.aupdate_state(
+        config,
+        {"messages": [HumanMessage(content=request.message)]},
+        as_node=START,
+    )
+
     await r.set(f"{stream_id}:status", "running", ex=STREAM_TTL_SECONDS)
     await r.set(thread_id, stream_id, ex=STREAM_TTL_SECONDS)
 
     await generate_response.defer_async(
         thread_id=thread_id,
         stream_id=stream_id,
-        message=request.message,
     )
 
     return None
