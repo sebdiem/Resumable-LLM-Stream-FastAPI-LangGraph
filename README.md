@@ -11,48 +11,24 @@ High-level template for resumable LLM token streaming using FastAPI, Redis Strea
 <img width="1512" height="838" alt="image" src="https://github.com/user-attachments/assets/fd259a7c-ce9e-4082-a20d-2b13b77dc903" />
 
 ### Features
+
+- **Task queue**: Conversations tasks are stored in a queue and handled by workers as they pop in the queue
 - **Resumable streaming**: Tokens are streamed into Redis; clients consume via SSE and can resume after network hiccups.
 - **LangGraph Persistence**: Conversation state persisted via LangGraph Postgres checkpointer.
 - **ReAct agent**: Simple Agent with a simple web-search tool and summarization hook for long context.
 - **Minimal UI**: Static frontend served from `src/frontend/`.
 
-### Requirements
-- Python 3.11+
-- Redis 6+ (or compatible managed Redis)
-- PostgreSQL (for LangGraph checkpoints)
-- LLM provider API key (OpenAI/Anthropic/Google, selectable in config)
-
 ### Run the project
-1. Clone and enter the repository:
-```bash
-git clone https://github.com/Boohdaaaan/Resumable-LLM-Stream-FastAPI-LangGraph
-cd Resumable-LLM-Stream-FastAPI-LangGraph
-```
 
-2. Install dependencies:
-- Option A (pip):
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -U pip
-pip install -e .
-```
-- Option B (uv):
-```bash
-uv sync
-```
-
-3. Configure the app:
-- Create a `.env` file in the project root.
+1. Configure the app:
+- Create a `.env` file in the project root containing your API keys.
 - Select the LLM provider/model in `src/ai/config.py` under the `config` mapping (supported: `openai`, `anthropic`, `google`).
 
-4. Start the API:
-```bash
-uvicorn app:app --reload --host 0.0.0.0 --port 8000
-```
+2. Start the app
 
-5. Verify:
-- Open docs at `http://localhost:8000/docs`.
-- UI is served at `http://localhost:8000`.
+```bash
+docker compose up --build
+```
 
 ### How streaming works
 
